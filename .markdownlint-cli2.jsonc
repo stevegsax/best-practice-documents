@@ -1,0 +1,23 @@
+{
+  // markdownlint-cli2 configuration for the best-practice-documents repo.
+  // Applies to every markdown file at or below this directory, replacing the
+  // per-file `<!-- markdownlint-disable -->` directives in the guideline docs.
+
+  // Rule configuration (markdownlint rules live under `config`).
+  "config": {
+    "default": true,
+    // Long single-line prose bullets are the house style for these guidelines.
+    "MD013": false
+  },
+
+  // Default globs so a bare `markdownlint-cli2` lints the whole repo.
+  "globs": [
+    "**/*.md"
+  ],
+
+  // Archived/superseded docs and dependencies are not maintained to spec.
+  "ignores": [
+    "obsolete/**",
+    "node_modules/**"
+  ]
+}

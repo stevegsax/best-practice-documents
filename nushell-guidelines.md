@@ -1,7 +1,5 @@
 # Nushell guidelines
 
-<!-- markdownlint-disable MD013 -->
-
 ## General Guidelines
 
 - **Target Nushell 0.113.0.** Check it at the boundary (`version | get version`) and fail fast on a mismatch. Nushell makes breaking syntax changes between minor releases; "works on my machine" is a version statement, not a fact. Every concrete syntax in this document is verified against 0.112.2 — re-verify before assuming it holds on a different version.
