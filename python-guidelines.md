@@ -33,13 +33,14 @@ The pattern survives contact with everyday development only when these rules are
 ### Module structure
 
 - **Imports go inward, never reverse.** Pure modules MUST NOT import from modules that do I/O, manage state, or call framework APIs. If you need to, the boundary is in the wrong place — push the I/O out, not the import in.
+- **Keep logic out of shell surfaces.** Business logic must not live in ORM models, CLI entrypoints, HTTP handlers, or adapters — those layers wire I/O and pass values inward; the logic worth testing belongs in a pure core function they call. The complement of "imports go inward": code, like imports, flows toward the core.
 - **Side-effect imports are an anti-pattern**, even when they look intentional. Don't register routes / steps / hooks / plugins via import-time side effects. Use the framework's own discovery mechanism (entry points, conftest hierarchy, plugin specs, decorators that the framework collects). Side-effect registration depends on the importer running at the right time and breaks silently across framework versions.
 - **Type-only imports go under `if TYPE_CHECKING:`.** Imports needed solely for annotations — especially of shell or I/O types — must not run at import time. Guard them with `from typing import TYPE_CHECKING` so a pure module never pulls in a heavy or effectful dependency just to name a type.
 - **Declare the public surface with `__all__`; never `from module import *`.** A star-import defeats "find references," silently shadows names, and couples the importer to a module's incidental contents.
 
 ### Immutability by default
 
-- **`@dataclass(frozen=True, slots=True)` for value types.** Default to immutable; produce changes with `dataclasses.replace`. Frozen routes `__init__` through `object.__setattr__`, so instantiation runs ~2.4× a plain dataclass — invisible against any I/O — and `slots=True` claws most of that back (less memory, faster attribute access) while `kw_only=True` stops fields being swapped positionally in wide value types.
+- **`@dataclass(frozen=True, slots=True, kw_only=True)` for value types.** Default to immutable; produce changes with `dataclasses.replace`. Frozen routes `__init__` through `object.__setattr__`, so instantiation runs ~2.4× a plain dataclass — invisible against any I/O — and `slots=True` claws most of that back (less memory, faster attribute access). Make `kw_only=True` the default, not a measure reserved for wide value types: it forces construction by name, so fields can never be swapped positionally and a field can be added or reordered without silently rebinding existing call sites.
 - **Frozen is shallow — freeze the fields too.** `frozen=True` blocks rebinding a field, not mutation of the value it points at: a frozen dataclass with a `list` field still allows `obj.items.append(...)`. Use `tuple`, `frozenset`, and `Mapping`/`types.MappingProxyType` for collection fields so the whole value is actually immutable.
 - **Never use a mutable default argument.** `def f(items: list = []):` shares one list across every call — the canonical Python footgun and a direct violation of this section. Use `None` and create inside, or an immutable default. `ruff` flags it (B006).
 - **`Mapping`, `Sequence`, `Iterable` over `dict`, `list` in function signatures.** Signals a read-only contract and lets callers pass any compatible type.
@@ -67,6 +68,7 @@ The pattern survives contact with everyday development only when these rules are
 - **`Protocol` over ABC for duck-typed contracts** — structural typing matches Python's nature, and a narrow `Protocol` is the dependency-injection seam the core depends on: the shell passes anything that satisfies it.
 - **`NewType` distinguishes IDs but does not validate them.** `UserId = NewType("UserId", uuid.UUID)` stops a `DocumentId` being passed where a `UserId` belongs, but `UserId(x)` runs no check — it is a static-only label. When a value needs validating (a positive price, a well-formed symbol), parse it into a frozen single-field dataclass with `__post_init__` validation, or a pydantic `Annotated[...]` type, so the type means "checked," not merely "named."
 - **Prefer `object` to `Any` when you mean "any type, but I'll narrow it."** `object` forces an `isinstance`/`TypeGuard` check before use; `Any` switches the checker off and is contagious. For external data, don't reach for `Any` at all — parse it (pydantic / `TypeAdapter`) into a precise type at the boundary. If you must use `Any`, leave a comment; and never write a bare `# type: ignore` — use `# type: ignore[code]` so `warn_unused_ignores` retires it when it's no longer needed.
+- **Model domain objects as frozen dataclasses or pydantic models — never `dict[str, Any]`.** A bare dict gives no field names, no checker support, and nowhere to attach invariants, so every field access is an unchecked `Any`. Reserve dict-shaped typing for structured boundary payloads, and type those with `TypedDict` (below), not `dict[str, Any]`.
 - **Avoid `typing.cast`** — it's an unchecked assertion (the `as`-equivalent) and is how "impossible" runtime errors happen. Narrow with `isinstance`/`assert`/`TypeGuard` instead; reserve `cast` for the validated boundary where you've already proven the shape.
 - **`Final` for constants; closed sets are `Literal` or `Enum`.** `Literal["open", "closed", "settled"]` is the lightweight choice for string tags, especially discriminators; reach for `enum.Enum`/`StrEnum` when you want a named runtime type with iteration, methods, or a value that travels through the system — unlike TypeScript, a Python `Enum` carries no runtime penalty worth avoiding. `TypedDict` with `NotRequired` types structured dicts at boundaries (webhook payloads, API JSON).
 - **Modern typing pays its way.** Use PEP 695 syntax (`type Vector = tuple[float, ...]`, `def first[T](xs: Sequence[T]) -> T`) over explicit `TypeVar`; put `@override` (PEP 698) on every method that overrides one, so a renamed base method becomes a type error; and use `typing.assert_never` to make `match` exhaustiveness compiler-checked (see *Make illegal states unrepresentable*).
@@ -104,17 +106,17 @@ The pattern survives contact with everyday development only when these rules are
 - **Replace boolean/optional soup with a state union.** Don't model an order as `filled: bool`, `rejected: bool`, `fill_price: Decimal | None` — that makes the impossible combinations (filled *and* rejected; a `fill_price` with no fill) as constructible as the valid ones. Model the legal states as a union of frozen dataclasses with a `Literal` discriminator, and branch with `match` + `assert_never` so adding a variant becomes a type error at every site that handled the old set:
 
   ```python
-  @dataclass(frozen=True, slots=True)
+  @dataclass(frozen=True, slots=True, kw_only=True)
   class Pending:
       kind: Literal["pending"] = "pending"
 
-  @dataclass(frozen=True, slots=True)
+  @dataclass(frozen=True, slots=True, kw_only=True)
   class Filled:
       fill_price: Decimal
       filled_at: datetime
       kind: Literal["filled"] = "filled"
 
-  @dataclass(frozen=True, slots=True)
+  @dataclass(frozen=True, slots=True, kw_only=True)
   class Rejected:
       reason: str
       kind: Literal["rejected"] = "rejected"
@@ -156,6 +158,7 @@ Anti-patterns to flag in review:
 - Hardcoded production paths (use `tmp_path`).
 - A pure-function unit test that needs more than `parametrize`-worth of setup — the function isn't pure; fix the function, not the test.
 - Side-effect imports for plugin/step/route registration — use the framework's own discovery mechanism (conftest hierarchy, entry points, plugin specs). Side-effect registration is fragile and silently breaks across framework versions.
+- Business logic living in the shell (ORM models, CLI entrypoints, HTTP handlers, adapters) — the logic worth testing belongs in a pure core function called from them; see *Keep logic out of shell surfaces* under Module structure.
 - A test that's "almost the same as that other test" — promote shared setup to a fixture or `parametrize`.
 - A refactor that requires editing tests — either observable behavior changed (then it's not a refactor) or the test was coupled to implementation (fix the coupling, don't preserve it).
 
@@ -183,14 +186,14 @@ from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Fill:
     symbol: str
     qty: int
     price: Decimal  # money is Decimal, never float
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ParseError:
     field: Literal["symbol", "qty", "price"]
     reason: Literal["missing", "not-a-number"]
@@ -224,18 +227,18 @@ def _to_decimal(value: object) -> Decimal | None:
 def parse_fill(raw: Mapping[str, object]) -> Fill | ParseError:
     symbol = raw.get("symbol")
     if not isinstance(symbol, str) or not symbol.strip():
-        return ParseError("symbol", "missing")
+        return ParseError(field="symbol", reason="missing")
     if "qty" not in raw:
-        return ParseError("qty", "missing")
+        return ParseError(field="qty", reason="missing")
     qty = _to_int(raw["qty"])
     if qty is None:
-        return ParseError("qty", "not-a-number")
+        return ParseError(field="qty", reason="not-a-number")
     if "price" not in raw:
-        return ParseError("price", "missing")
+        return ParseError(field="price", reason="missing")
     price = _to_decimal(raw["price"])
     if price is None:
-        return ParseError("price", "not-a-number")
-    return Fill(symbol, qty, price)
+        return ParseError(field="price", reason="not-a-number")
+    return Fill(symbol=symbol, qty=qty, price=price)
 
 
 # `now` is injected (pseudo-I/O) so the core stays pure and deterministic.
@@ -259,11 +262,11 @@ NOW = datetime(2026, 5, 16, 12, 0, 0)
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ({"symbol": "AAPL", "qty": "10", "price": "190.50"}, Fill("AAPL", 10, Decimal("190.50"))),
-        ({"symbol": "AAPL", "price": "190.50"}, ParseError("qty", "missing")),
-        ({"symbol": "AAPL", "qty": "  ", "price": "190.50"}, ParseError("qty", "not-a-number")),
-        ({"qty": "10", "price": "190.50"}, ParseError("symbol", "missing")),
-        ({"symbol": "AAPL", "qty": "10", "price": "oops"}, ParseError("price", "not-a-number")),
+        ({"symbol": "AAPL", "qty": "10", "price": "190.50"}, Fill(symbol="AAPL", qty=10, price=Decimal("190.50"))),
+        ({"symbol": "AAPL", "price": "190.50"}, ParseError(field="qty", reason="missing")),
+        ({"symbol": "AAPL", "qty": "  ", "price": "190.50"}, ParseError(field="qty", reason="not-a-number")),
+        ({"qty": "10", "price": "190.50"}, ParseError(field="symbol", reason="missing")),
+        ({"symbol": "AAPL", "qty": "10", "price": "oops"}, ParseError(field="price", reason="not-a-number")),
     ],
 )
 def test_parse_fill(raw: dict[str, object], expected: Fill | ParseError) -> None:
