@@ -4,6 +4,7 @@
 
 - Use `uv` to manage Python dependencies, virtual environments, and tools. Commit `uv.lock` and pin the interpreter (`.python-version`, and `requires-python` in `pyproject.toml`) so a build is reproducible across machines and CI rather than dependent on an ambient environment — table stakes for a regulated trading shop.
 - Use `ruff` to lint and format, run in CI. Many rules below are mechanically enforceable — bare `except`, `print` in library code, mutable default arguments, unused imports and `# type: ignore`s — so let the linter enforce them instead of relying on review.
+- **House ruff policy — this stanza is the owning source; project configs realize these values, and a value not stated here is a missing input, not a free choice:** `line-length = 100`, `[tool.ruff.lint] select = ["E", "F", "I", "UP", "B", "SIM"]`, formatter settings otherwise at ruff defaults.
 - Target a current Python (3.13+, ideally 3.14). Several rules here assume modern stdlib and typing: `asyncio.TaskGroup`, `typing.assert_never`, `StrEnum`, PEP 695 generics, and PEP 649 deferred annotations.
 - Correctness and testability are more important than performance.
 - Where possible, adopt a `functional programming` design philosophy where functions are **pure** — deterministic and free of side effects — and side effects are handled separately.
